@@ -1,0 +1,13 @@
+# Kafka client library for Python
+kafka-python-ng==2.2.3
+
+# Testing
+pytest==8.3.4
+pytest-cov==6.0.0
+
+# Code quality
+black==24.10.0
+flake8==7.1.1
+
+# Utilities
+python-dotenv==1.0.1

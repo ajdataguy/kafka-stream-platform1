@@ -1,0 +1,147 @@
+##############################################################################
+# CI/CD Pipeline for Kafka Stream Platform
+#
+# THIS FILE TEACHES YOU:
+#   - How GitHub Actions works (triggers, jobs, steps)
+#   - How to lint and test Python code automatically
+#   - How to validate Docker Compose configs in CI
+#   - How to run integration tests with Kafka in CI
+#
+# WHEN DOES THIS RUN?
+#   - Every push to the 'main' branch
+#   - Every pull request targeting 'main'
+##############################################################################
+
+name: CI Pipeline
+
+# TRIGGERS — When should this pipeline run?
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# JOBS — Each job runs on a fresh virtual machine
+jobs:
+
+  # =========================================================================
+  # JOB 1: Lint — Check code style and formatting
+  # =========================================================================
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the code from the repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Check formatting with black
+      # --check means "don't fix, just report"
+      - name: Check formatting with Black
+        run: black --check src/ tests/
+
+      # Step 5: Check code quality with flake8
+      - name: Lint with Flake8
+        run: flake8 src/ tests/ --max-line-length=100 --ignore=E501,W503
+
+  # =========================================================================
+  # JOB 2: Test — Run unit tests
+  # =========================================================================
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    # This job needs lint to pass first
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Run tests with coverage reporting
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --cov=src --cov-report=term-missing
+
+  # =========================================================================
+  # JOB 3: Docker Validate — Make sure Docker Compose config is valid
+  # =========================================================================
+  docker-validate:
+    name: Docker Compose Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Validate the docker-compose.yml syntax
+      - name: Validate Docker Compose
+        run: docker compose -f docker/docker-compose.yml config --quiet
+
+  # =========================================================================
+  # JOB 4: Integration Test — Spin up Kafka and test end-to-end
+  # =========================================================================
+  integration-test:
+    name: Integration Test (Kafka)
+    runs-on: ubuntu-latest
+    needs: [test, docker-validate]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Start Kafka using our Docker Compose file
+      - name: Start Kafka
+        run: |
+          docker compose -f docker/docker-compose.yml up -d kafka
+          echo "Waiting for Kafka to be healthy..."
+          # Wait for the health check to pass (up to 60 seconds)
+          for i in $(seq 1 30); do
+            if docker compose -f docker/docker-compose.yml exec -T kafka \
+              kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1; then
+              echo "Kafka is ready!"
+              break
+            fi
+            echo "  Attempt $i/30 - waiting..."
+            sleep 2
+          done
+
+      # Run a simple produce/consume test
+      - name: Run integration test
+        run: python tests/test_integration.py
+
+      # Clean up
+      - name: Stop Kafka
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
